@@ -144,18 +144,21 @@ async function createDiscordClientForBot(
       return;
     }
 
+    // If message is from another bot, apply chain limit
     if (message.author.bot) {
       if (!shouldAllowBotMessage(message)) {
         // If chain limit exceeded, do not respond.
         return;
       }
     } else {
+      // Human spoke – reset bot chain for this channel
       const channelId = message.channel.id;
       if (botToBotChains.has(channelId)) {
         botToBotChains.delete(channelId);
       }
     }
 
+    // Check if the bot has permission to respond in this channel
     if (!(await canRespondToChannel(message.channel))) return;
 
     // Handle DMs differently from server messages
@@ -174,7 +177,7 @@ async function createDiscordClientForBot(
     const isMentioned = message.mentions.users.has(botUser.id);
     const containsBotName = message.content.toLowerCase().includes(botUsername);
 
-    // Ignore if the bot is not mentioned or referenced
+    // For now: only respond if mentioned or name-used
     if (!isMentioned && !containsBotName) return;
 
     try {
@@ -189,7 +192,7 @@ async function createDiscordClientForBot(
       // Fetch recent conversation with caching
       const conversationArray = await ephemeralFetchConversation(
         message.channel as TextChannel | DMChannel,
-        100, // last 30 messages now 100
+        100, // last 100 messages
         5000 // 5 second cache
       );
 
@@ -205,44 +208,39 @@ async function createDiscordClientForBot(
         return;
       }
 
-      // If rate limited, silently ignore
-if (aiResult.type === "rate_limited") {
-  return;
-}
+      // If no reply text, skip
+      if (!aiResult.reply) {
+        return;
+      }
 
-// If no reply text, skip
-if (!aiResult.reply) {
-  return;
-}
+      // Trim for safety
+      const reply = aiResult.reply.trim();
+      if (!reply) return;
 
-// Trim for safety
-const reply = aiResult.reply.trim();
-if (!reply) return;
+      // ----------------------
+      // ANTI-DUPLICATE CHECK
+      // ----------------------
+      const last = lastReplyPerChannel.get(message.channel.id);
 
-// ----------------------
-// ANTI-DUPLICATE CHECK
-// ----------------------
-const last = lastReplyPerChannel.get(message.channel.id);
+      if (last && last === reply) {
+        console.log(`Skipping duplicate reply in channel ${message.channel.id}`);
+        return;
+      }
 
-if (last && last === reply) {
-  console.log(`Skipping duplicate reply in channel ${message.channel.id}`);
-  return;
-}
+      // Store this reply for this channel
+      lastReplyPerChannel.set(message.channel.id, reply);
 
-// Store this reply for this channel
-lastReplyPerChannel.set(message.channel.id, reply);
-
-// ----------------------
-// SEND THE REPLY
-// ----------------------
-if (isMentioned) {
-  await message.reply(reply);
-} else if (
-  message.channel instanceof BaseGuildTextChannel ||
-  message.channel instanceof DMChannel
-) {
-  await message.channel.send(reply);
-}
+      // ----------------------
+      // SEND THE REPLY
+      // ----------------------
+      if (isMentioned) {
+        await message.reply(reply);
+      } else if (
+        message.channel instanceof BaseGuildTextChannel ||
+        message.channel instanceof DMChannel
+      ) {
+        await message.channel.send(reply);
+      }
 
     } catch (error) {
       console.error(`[Bot ${botConfig.id}] Error:`, error);
