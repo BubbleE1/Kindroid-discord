@@ -27,6 +27,8 @@ const activeBots = new Map<string, Client>();
 
 // Track DM conversation counts with proper typing
 const dmConversationCounts = new Map<string, DMConversationCount>();
+const lastAutoReplyPerChannel = new Map<string, number>();
+const lastReplyPerChannel = new Map<string, string>(); //new! Same but reply
 
 // Helper function to check if the bot can respond to a channel before responding
 function shouldAllowBotMessage(message: Message): boolean {
@@ -203,15 +205,45 @@ async function createDiscordClientForBot(
         return;
       }
 
-      // If it was a mention, reply to the message. Otherwise, send as normal message
-      if (isMentioned) {
-        await message.reply(aiResult.reply);
-      } else if (
-        message.channel instanceof BaseGuildTextChannel ||
-        message.channel instanceof DMChannel
-      ) {
-        await message.channel.send(aiResult.reply);
-      }
+      // If rate limited, silently ignore
+if (aiResult.type === "rate_limited") {
+  return;
+}
+
+// If no reply text, skip
+if (!aiResult.reply) {
+  return;
+}
+
+// Trim for safety
+const reply = aiResult.reply.trim();
+if (!reply) return;
+
+// ----------------------
+// ANTI-DUPLICATE CHECK
+// ----------------------
+const last = lastReplyPerChannel.get(message.channel.id);
+
+if (last && last === reply) {
+  console.log(`Skipping duplicate reply in channel ${message.channel.id}`);
+  return;
+}
+
+// Store this reply for this channel
+lastReplyPerChannel.set(message.channel.id, reply);
+
+// ----------------------
+// SEND THE REPLY
+// ----------------------
+if (isMentioned) {
+  await message.reply(reply);
+} else if (
+  message.channel instanceof BaseGuildTextChannel ||
+  message.channel instanceof DMChannel
+) {
+  await message.channel.send(reply);
+}
+
     } catch (error) {
       console.error(`[Bot ${botConfig.id}] Error:`, error);
       const errorMessage =
